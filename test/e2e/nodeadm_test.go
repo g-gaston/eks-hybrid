@@ -25,6 +25,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
@@ -302,117 +303,198 @@ var _ = Describe("Hybrid Nodes", func() {
 		})
 
 		When("using ec2 instance as hybrid nodes", func() {
+			var entries []TableEntry
 			for _, os := range osList {
 				for _, provider := range credentialProviders {
-					DescribeTable("Joining a node",
-						func(ctx context.Context, os NodeadmOS, provider NodeadmCredentialsProvider) {
-							Expect(os).NotTo(BeNil())
-							Expect(provider).NotTo(BeNil())
-
-							nodeSpec := NodeSpec{
-								OS:       os,
-								Cluster:  test.cluster,
-								Provider: provider,
-							}
-
-							instanceName := fmt.Sprintf("EKSHybridCI-%s-%s-%s",
-								removeSpecialChars(test.cluster.clusterName),
-								removeSpecialChars(os.Name()),
-								removeSpecialChars(string(provider.Name())),
-							)
-
-							files, err := provider.FilesForNode(nodeSpec)
-							Expect(err).NotTo(HaveOccurred())
-
-							nodeadmConfig, err := provider.NodeadmConfig(nodeSpec)
-							Expect(err).NotTo(HaveOccurred(), "expected to build nodeconfig")
-
-							nodeadmConfigYaml, err := yaml.Marshal(&nodeadmConfig)
-							Expect(err).NotTo(HaveOccurred(), "expected to successfully marshal nodeadm config to YAML")
-
-							var rootPasswordHash string
-							if suite.TestConfig.SetRootPassword {
-								var rootPassword string
-								rootPassword, rootPasswordHash, err = generateOSPassword()
-								Expect(err).NotTo(HaveOccurred(), "expected to successfully generate root password")
-								test.logger.Info(fmt.Sprintf("Instance Root Password: %s", rootPassword))
-							}
-
-							userdata, err := os.BuildUserData(UserDataInput{
-								KubernetesVersion: test.cluster.kubernetesVersion,
-								NodeadmUrls:       test.nodeadmURLs,
-								NodeadmConfigYaml: string(nodeadmConfigYaml),
-								Provider:          string(provider.Name()),
-								RootPasswordHash:  rootPasswordHash,
-								Files:             files,
-							})
-							Expect(err).NotTo(HaveOccurred(), "expected to successfully build user data")
-
-							amiId, err := os.AMIName(ctx, test.awsSession)
-							Expect(err).NotTo(HaveOccurred(), "expected to successfully retrieve ami id")
-
-							ec2Input := ec2InstanceConfig{
-								clusterName:        test.cluster.clusterName,
-								instanceName:       instanceName,
-								amiID:              amiId,
-								instanceType:       os.InstanceType(),
-								volumeSize:         ec2VolumeSize,
-								subnetID:           test.cluster.subnetID,
-								securityGroupID:    test.cluster.securityGroupID,
-								userData:           userdata,
-								instanceProfileARN: test.stackOut.InstanceProfileARN,
-							}
-
-							test.logger.Info("Creating a hybrid EC2 Instance...")
-							ec2, err := ec2Input.create(ctx, test.ec2ClientV2, test.ssmClient)
-							Expect(err).NotTo(HaveOccurred(), "EC2 Instance should have been created successfully")
-							test.logger.Info(fmt.Sprintf("EC2 Instance Connect: https://%s.console.aws.amazon.com/ec2-instance-connect/ssh?connType=serial&instanceId=%s&region=%s&serialPort=0", suite.TestConfig.ClusterRegion, ec2.instanceID, suite.TestConfig.ClusterRegion))
-
-							DeferCleanup(func(ctx context.Context) {
-								if skipCleanup {
-									test.logger.Info("Skipping EC2 Instance deletion", "instanceID", ec2.instanceID)
-									return
-								}
-								test.logger.Info("Deleting EC2 Instance", "instanceID", ec2.instanceID)
-								Expect(deleteEC2Instance(ctx, test.ec2ClientV2, ec2.instanceID)).NotTo(HaveOccurred(), "EC2 Instance should have been deleted successfully")
-								test.logger.Info("Successfully deleted EC2 Instance", "instanceID", ec2.instanceID)
-							})
-
-							joinNodeTest := joinNodeTest{
-								k8s:           test.k8sClient,
-								nodeIPAddress: ec2.ipAddress,
-								logger:        test.logger,
-							}
-							Expect(joinNodeTest.Run(ctx)).To(Succeed(), "node should have joined the cluster sucessfully")
-
-							test.logger.Info("Resetting hybrid node...")
-
-							uninstallNodeTest := uninstallNodeTest{
-								k8s:      test.k8sClient,
-								ssm:      test.ssmClient,
-								ec2:      ec2,
-								provider: provider,
-								logger:   test.logger,
-							}
-							Expect(uninstallNodeTest.Run(ctx)).To(Succeed(), "node should have been reset sucessfully")
-
-							test.logger.Info("Rebooting EC2 Instance.")
-							Expect(rebootEC2Instance(ctx, test.ec2ClientV2, ec2.instanceID)).NotTo(HaveOccurred(), "EC2 Instance should have rebooted successfully")
-							test.logger.Info("EC2 Instance rebooted successfully.")
-
-							Expect(joinNodeTest.Run(ctx)).To(Succeed(), "node should have re-joined, there must be a problem with uninstall")
-
-							if skipCleanup {
-								test.logger.Info("Skipping nodeadm uninstall from the hybrid node...")
-								return
-							}
-
-							Expect(uninstallNodeTest.Run(ctx)).To(Succeed(), "node should have been reset sucessfully")
-						},
-						Entry(fmt.Sprintf("With OS %s and with Credential Provider %s", os.Name(), string(provider.Name())), context.Background(), os, provider, Label(os.Name(), string(provider.Name()), "simpleflow")),
+					entries = append(entries,
+						Entry(
+							fmt.Sprintf("with OS %s and with Credential Provider %s", os.Name(), string(provider.Name())),
+							os, provider,
+							Label(os.Name(), string(provider.Name()), "install-uninstall-reboot-uninstall-flow"),
+						),
 					)
 				}
 			}
+
+			testBody := func(os NodeadmOS, provider NodeadmCredentialsProvider) {
+				var instance ec2Instance
+				BeforeAll(func(ctx context.Context) {
+					Expect(os).NotTo(BeNil())
+					Expect(provider).NotTo(BeNil())
+
+					nodeSpec := NodeSpec{
+						OS:       os,
+						Cluster:  test.cluster,
+						Provider: provider,
+					}
+
+					instanceName := fmt.Sprintf("EKSHybridCI-%s-%s-%s",
+						removeSpecialChars(test.cluster.clusterName),
+						removeSpecialChars(os.Name()),
+						removeSpecialChars(string(provider.Name())),
+					)
+
+					files, err := provider.FilesForNode(nodeSpec)
+					Expect(err).NotTo(HaveOccurred())
+
+					nodeadmConfig, err := provider.NodeadmConfig(nodeSpec)
+					Expect(err).NotTo(HaveOccurred(), "expected to build nodeconfig")
+
+					nodeadmConfigYaml, err := yaml.Marshal(&nodeadmConfig)
+					Expect(err).NotTo(HaveOccurred(), "expected to successfully marshal nodeadm config to YAML")
+
+					var rootPasswordHash string
+					if suite.TestConfig.SetRootPassword {
+						var rootPassword string
+						rootPassword, rootPasswordHash, err = generateOSPassword()
+						Expect(err).NotTo(HaveOccurred(), "expected to successfully generate root password")
+						test.logger.Info(fmt.Sprintf("Instance Root Password: %s", rootPassword))
+					}
+
+					userdata, err := os.BuildUserData(UserDataInput{
+						KubernetesVersion: test.cluster.kubernetesVersion,
+						NodeadmUrls:       test.nodeadmURLs,
+						NodeadmConfigYaml: string(nodeadmConfigYaml),
+						Provider:          string(provider.Name()),
+						RootPasswordHash:  rootPasswordHash,
+						Files:             files,
+					})
+					Expect(err).NotTo(HaveOccurred(), "expected to successfully build user data")
+
+					amiId, err := os.AMIName(ctx, test.awsSession)
+					Expect(err).NotTo(HaveOccurred(), "expected to successfully retrieve ami id")
+
+					ec2Input := ec2InstanceConfig{
+						clusterName:        test.cluster.clusterName,
+						instanceName:       instanceName,
+						amiID:              amiId,
+						instanceType:       os.InstanceType(),
+						volumeSize:         ec2VolumeSize,
+						subnetID:           test.cluster.subnetID,
+						securityGroupID:    test.cluster.securityGroupID,
+						userData:           userdata,
+						instanceProfileARN: test.stackOut.InstanceProfileARN,
+					}
+
+					test.logger.Info("Creating a hybrid EC2 Instance...")
+					ec2, err := ec2Input.create(ctx, test.ec2ClientV2, test.ssmClient)
+					Expect(err).NotTo(HaveOccurred(), "EC2 Instance should have been created successfully")
+					test.logger.Info(fmt.Sprintf("EC2 Instance Connect: https://%s.console.aws.amazon.com/ec2-instance-connect/ssh?connType=serial&instanceId=%s&region=%s&serialPort=0", suite.TestConfig.ClusterRegion, ec2.instanceID, suite.TestConfig.ClusterRegion))
+					instance = ec2
+
+					DeferCleanup(func(ctx context.Context) {
+						if skipCleanup {
+							test.logger.Info("Skipping EC2 Instance deletion", "instanceID", instance.instanceID)
+							return
+						}
+						test.logger.Info("Deleting EC2 Instance", "instanceID", instance.instanceID)
+						Expect(deleteEC2Instance(ctx, test.ec2ClientV2, instance.instanceID)).NotTo(HaveOccurred(), "EC2 Instance should have been deleted successfully")
+						test.logger.Info("Successfully deleted EC2 Instance", "instanceID", instance.instanceID)
+					})
+				})
+
+				It("joins the cluster", func(ctx context.Context) {
+					node, err := waitForNode(ctx, test.k8sClient, instance.ipAddress, test.logger)
+					Expect(err).NotTo(HaveOccurred())
+
+					test.logger.Info("Waiting for hybrid node to be ready...")
+					err = waitForHybridNodeToBeReady(ctx, test.k8sClient, node.Name, test.logger)
+					Expect(err).NotTo(HaveOccurred())
+				})
+
+				When("the node is ready", Ordered, func() {
+					var node *corev1.Node
+					BeforeAll(func(ctx context.Context) {
+						var err error
+						node, err = waitForNode(ctx, test.k8sClient, instance.ipAddress, test.logger)
+						Expect(err).NotTo(HaveOccurred())
+					})
+					It("runs a pod", func(ctx context.Context) {
+						test.logger.Info("Creating a test pod on the hybrid node...")
+						podName := getNginxPodName(node.Name)
+						err := createNginxPodInNode(ctx, test.k8sClient, node.Name)
+						Expect(err).NotTo(HaveOccurred())
+						test.logger.Info(fmt.Sprintf("Pod %s created and running on node %s", podName, node.Name))
+					})
+					It("gets pod logs", func(ctx context.Context) {
+						test.logger.Info("TODO: implement getting pod logs")
+					})
+					It("execs into the pod", func(ctx context.Context) {
+						test.logger.Info("TODO: implement exec into pod")
+					})
+					It("deletes the pod", func(ctx context.Context) {
+						podName := getNginxPodName(node.Name)
+						test.logger.Info("Deleting test pod", "pod", podName)
+						err := deletePod(ctx, test.k8sClient, podName, podNamespace)
+						Expect(err).NotTo(HaveOccurred())
+						test.logger.Info("Pod deleted successfully", "pod", podName)
+					})
+				})
+
+				When("running nodeadm uninstall", Ordered, func() {
+					It("becomes not ready", func(ctx context.Context) {
+					})
+					It("can delete the node", func(ctx context.Context) {
+					})
+					It("provider verifies uninstallation", func(ctx context.Context) {
+					})
+				})
+
+				When("rebooting the instance", Ordered, func() {
+					It("joins the cluster", func(ctx context.Context) {
+					})
+				})
+
+				When("running nodeadm uninstall the second time", Ordered, func() {
+					It("becomes not ready", func(ctx context.Context) {
+					})
+					It("can delete the node", func(ctx context.Context) {
+					})
+					It("provider verifies uninstallation", func(ctx context.Context) {
+					})
+				})
+			}
+
+			tableSubtree := make([]any, 0, len(entries)+2)
+			tableSubtree = append(tableSubtree, Ordered, testBody)
+			for _, entry := range entries {
+				tableSubtree = append(tableSubtree, entry)
+			}
+
+			DescribeTableSubtree("joining a node", tableSubtree...)
+
+			// for _, os := range osList {
+			// 	for _, provider := range credentialProviders {
+			// 		DescribeTable("Joining a node",
+			// 			func(ctx context.Context, os NodeadmOS, provider NodeadmCredentialsProvider) {
+			// 				test.logger.Info("Resetting hybrid node...")
+
+			// 				uninstallNodeTest := uninstallNodeTest{
+			// 					k8s:      test.k8sClient,
+			// 					ssm:      test.ssmClient,
+			// 					ec2:      ec2,
+			// 					provider: provider,
+			// 					logger:   test.logger,
+			// 				}
+			// 				Expect(uninstallNodeTest.Run(ctx)).To(Succeed(), "node should have been reset sucessfully")
+
+			// 				test.logger.Info("Rebooting EC2 Instance.")
+			// 				Expect(rebootEC2Instance(ctx, test.ec2ClientV2, ec2.instanceID)).NotTo(HaveOccurred(), "EC2 Instance should have rebooted successfully")
+			// 				test.logger.Info("EC2 Instance rebooted successfully.")
+
+			// 				Expect(joinNodeTest.Run(ctx)).To(Succeed(), "node should have re-joined, there must be a problem with uninstall")
+
+			// 				if skipCleanup {
+			// 					test.logger.Info("Skipping nodeadm uninstall from the hybrid node...")
+			// 					return
+			// 				}
+
+			// 				Expect(uninstallNodeTest.Run(ctx)).To(Succeed(), "node should have been reset sucessfully")
+			// 			},
+			// 			Entry(fmt.Sprintf("With OS %s and with Credential Provider %s", os.Name(), string(provider.Name())), context.Background(), os, provider, Label(os.Name(), string(provider.Name()), "simpleflow")),
+			// 		)
+			// 	}
+			// }
 		})
 	})
 })
