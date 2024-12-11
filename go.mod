@@ -28,6 +28,7 @@ require (
 	k8s.io/apimachinery v0.29.5
 	k8s.io/client-go v0.29.5
 	k8s.io/cri-api v0.29.5
+	k8s.io/kubectl v0.29.5
 	k8s.io/kubelet v0.29.5
 	sigs.k8s.io/controller-runtime v0.17.0
 )
@@ -53,7 +54,6 @@ require (
 	github.com/xlab/treeprint v1.2.0 // indirect
 	go.starlark.net v0.0.0-20230525235612-a134d8f9ddca // indirect
 	k8s.io/cli-runtime v0.29.5 // indirect
-	k8s.io/kubectl v0.29.5 // indirect
 	sigs.k8s.io/kustomize/api v0.13.5-0.20230601165947-6ce0bf390ce3 // indirect
 	sigs.k8s.io/kustomize/kyaml v0.14.3-0.20230601165947-6ce0bf390ce3 // indirect
 )
