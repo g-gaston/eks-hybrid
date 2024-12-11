@@ -31,3 +31,11 @@ preflight:
     tag: "v1.16.3"
     imagePullPolicy: "IfNotPresent"
     digest: "sha256:62d2a09bbef840a46099ac4c69421c90f84f28d018d479749049011329aa7f28"
+# the cilium-operator by default tolerations all taints
+# this makes draining a difficult if the operator is running on that node
+# since it will just immediately restart
+# this restricts the toleration to the one needed during initialization
+# more info: https://github.com/cilium/cilium/pull/28856
+tolerations:
+  - key: node.kubernetes.io/not-ready
+    operator: Exists
