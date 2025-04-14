@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/aws/eks-hybrid/internal/api"
+	"github.com/aws/eks-hybrid/internal/creds"
 	"github.com/aws/eks-hybrid/internal/daemon"
 	"github.com/aws/eks-hybrid/internal/iamrolesanywhere"
 	"github.com/aws/eks-hybrid/internal/ssm"
@@ -18,6 +19,18 @@ import (
 const iamRoleAnywhereProfileName = "hybrid"
 
 func (hnp *HybridNodeProvider) ConfigureAws(ctx context.Context) error {
+	baseAWSConfig, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(hnp.nodeConfig.Spec.Cluster.Region),
+	)
+	if err != nil {
+		return fmt.Errorf("loading aws config: %w", err)
+	}
+
+	// First verify that we can access the right AWS API endpoints for the credential provider before we try to use any of them
+	if err := hnp.runner.Run(ctx, hnp.nodeConfig, creds.Validations(baseAWSConfig, hnp.nodeConfig)...); err != nil {
+		return err
+	}
+
 	if hnp.nodeConfig.IsSSM() {
 		configurator := SSMAWSConfigurator{
 			Manager: hnp.daemonManager,
@@ -50,6 +63,7 @@ func (hnp *HybridNodeProvider) ConfigureAws(ctx context.Context) error {
 
 		hnp.awsConfig = &awsConfig
 	}
+
 	return nil
 }
 
