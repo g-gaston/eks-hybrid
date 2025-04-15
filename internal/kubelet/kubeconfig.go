@@ -128,3 +128,14 @@ func GetKubeClientFromKubeConfig() (kubernetes.Interface, error) {
 func KubeconfigPath() string {
 	return kubeconfigPath
 }
+
+// Kubeconfig is the default kubeconfig generated for the kubelet.
+type Kubeconfig struct{}
+
+func (d Kubeconfig) Path() string {
+	return KubeconfigPath()
+}
+
+func (d Kubeconfig) BuildClient() (kubernetes.Interface, error) {
+	return GetKubeClientFromKubeConfig()
+}
