@@ -20,9 +20,9 @@ const (
 	kubeletCertValidation = "kubelet-cert-validation"
 )
 
-// ValidationRunner is an interface for running validations.
-type ValidationRunner[O validation.Validatable[O]] interface {
-	Run(ctx context.Context, obj O, validations ...validation.Validation[O]) error
+// ValidationRunner runs validations.
+type ValidationRunner interface {
+	Run(ctx context.Context, obj *api.NodeConfig, validations ...validation.Validation[*api.NodeConfig]) error
 }
 
 type HybridNodeProvider struct {
@@ -36,8 +36,8 @@ type HybridNodeProvider struct {
 	network       Network
 	// installRoot is optionally the root directory of the installation
 	// If not provided, the cert
-	installRoot  string
-	singleRunner ValidationRunner[*api.NodeConfig]
+	installRoot string
+	runner      ValidationRunner
 }
 
 type NodeProviderOpt func(*HybridNodeProvider)
@@ -53,7 +53,7 @@ func NewHybridNodeProvider(nodeConfig *api.NodeConfig, skipPhases []string, logg
 		logger:     logger,
 		skipPhases: skipPhases,
 		network:    &defaultKubeletNetwork{},
-		singleRunner: validation.NewSingleRunner[*api.NodeConfig](
+		runner: validation.NewSingleRunner[*api.NodeConfig](
 			validation.NewZapInformer(logger),
 			validation.WithSingleRunnerSkipValidations(skipValidations...),
 		),
@@ -97,10 +97,10 @@ func WithInstallRoot(root string) NodeProviderOpt {
 	}
 }
 
-// WithSingleRunner sets the single runner for the HybridNodeProvider.
-func WithSingleRunner(runner ValidationRunner[*api.NodeConfig]) NodeProviderOpt {
+// WithValidationRunner sets the runner for the HybridNodeProvider.
+func WithValidationRunner(runner ValidationRunner) NodeProviderOpt {
 	return func(hnp *HybridNodeProvider) {
-		hnp.singleRunner = runner
+		hnp.runner = runner
 	}
 }
 
