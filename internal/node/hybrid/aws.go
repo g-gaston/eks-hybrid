@@ -10,10 +10,12 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/aws/eks-hybrid/internal/api"
+	"github.com/aws/eks-hybrid/internal/aws/sts"
 	"github.com/aws/eks-hybrid/internal/creds"
 	"github.com/aws/eks-hybrid/internal/daemon"
 	"github.com/aws/eks-hybrid/internal/iamrolesanywhere"
 	"github.com/aws/eks-hybrid/internal/ssm"
+	"github.com/aws/eks-hybrid/internal/validation"
 )
 
 const iamRoleAnywhereProfileName = "hybrid"
@@ -64,6 +66,13 @@ func (hnp *HybridNodeProvider) ConfigureAws(ctx context.Context) error {
 		hnp.awsConfig = &awsConfig
 	}
 
+	// Then verify that we can authenticate with AWS
+	if err := hnp.runner.Run(ctx, hnp.nodeConfig,
+		validation.New("aws-auth", sts.NewAuthenticationValidator(*hnp.awsConfig).Run),
+	); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -78,7 +87,7 @@ type SSMAWSConfigurator struct {
 
 func (c SSMAWSConfigurator) Configure(ctx context.Context, nodeConfig *api.NodeConfig) error {
 	ssmDaemon := ssm.NewSsmDaemon(c.Manager, nodeConfig, c.Logger)
-	if err := ssmDaemon.Configure(); err != nil {
+	if err := ssmDaemon.Configure(ctx); err != nil {
 		return err
 	}
 	if err := ssmDaemon.EnsureRunning(ctx); err != nil {
