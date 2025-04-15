@@ -119,7 +119,7 @@ func GetKubeClientFromKubeConfig() (kubernetes.Interface, error) {
 	// Use the current context in the kubeconfig file
 	config, err := clientcmd.BuildConfigFromFlags("", KubeconfigPath())
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to build config from kubeconfig")
+		return nil, errors.Wrap(err, "building client for kubelet from default kubeconfig path")
 	}
 	return kubernetes.NewForConfig(config)
 }

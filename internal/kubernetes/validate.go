@@ -51,7 +51,10 @@ func (a APIServerValidator) MakeAuthenticatedRequest(ctx context.Context, inform
 
 	_, err = client.CoreV1().Endpoints("default").Get(ctx, "kubernetes", metav1.GetOptions{})
 	if err != nil {
-		err = validation.WithRemediation(err, badPermissionsRemediation)
+		err = validation.WithRemediation(
+			fmt.Errorf("making authenticated request to Kubernetes API endpoint: %w", err),
+			badPermissionsRemediation,
+		)
 		return err
 	}
 
