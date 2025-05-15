@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/aws/eks-hybrid/internal/api"
+	k8s "github.com/aws/eks-hybrid/internal/kubernetes"
 	"github.com/aws/eks-hybrid/internal/network"
 	"github.com/aws/eks-hybrid/internal/validation"
 )
@@ -52,7 +53,7 @@ func (a APIServerValidator) MakeAuthenticatedRequest(ctx context.Context, inform
 		return err
 	}
 
-	_, err = client.CoreV1().Endpoints("default").Get(ctx, "kubernetes", metav1.GetOptions{})
+	_, err = k8s.GetRetry(ctx, client.CoreV1().Endpoints("default"), "kubernetes")
 	if err != nil {
 		err = validation.WithRemediation(err, badPermissionsRemediation)
 		return err
@@ -140,7 +141,7 @@ func (a APIServerValidator) CheckVPCEndpointAccess(ctx context.Context, informer
 		return err
 	}
 
-	kubeEndpoint, err := client.CoreV1().Endpoints("default").Get(ctx, "kubernetes", metav1.GetOptions{})
+	kubeEndpoint, err := k8s.GetRetry(ctx, client.CoreV1().Endpoints("default"), "kubernetes")
 	if err != nil {
 		err = validation.WithRemediation(err, badPermissionsRemediation)
 		return err

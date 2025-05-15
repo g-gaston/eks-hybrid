@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -52,7 +53,7 @@ func TestAPIServerValidator_MakeAuthenticatedRequest(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := test.ContextWithTimeout(t, 5*time.Millisecond)
 			g := NewWithT(t)
 			client := fake.NewSimpleClientset(tc.objs...)
 			informer := test.NewFakeInformer()
@@ -206,7 +207,7 @@ func TestAPIServerValidator_CheckVPCEndpointAccess(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := test.ContextWithTimeout(t, 5*time.Millisecond)
 			g := NewWithT(t)
 			client := fake.NewSimpleClientset(tc.objs...)
 			informer := test.NewFakeInformer()
