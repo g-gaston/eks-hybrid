@@ -54,7 +54,7 @@ func TestGetPodsOnNode(t *testing.T) {
 				})
 				return client
 			},
-			expectedError: "failed to list all pods running on the node: ",
+			expectedError: "listing all pods running on the node",
 		},
 	}
 
@@ -62,12 +62,16 @@ func TestGetPodsOnNode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 			client := tt.setupFakeClient()
+			ctx := context.Background()
+			// Make sure tests that are supposed to fail fail fast
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Millisecond)
+			defer cancel()
 
-			pods, err := node.GetPodsOnNode(context.Background(), "test-node", client, node.WithValidationInterval(1*time.Millisecond))
+			pods, err := node.GetPodsOnNode(ctx, "test-node", client)
 
 			if tt.expectedError != "" {
 				g.Expect(err).ToNot(BeNil())
-				g.Expect(err.Error()).To(Equal(tt.expectedError))
+				g.Expect(err).To(MatchError(ContainSubstring(tt.expectedError)))
 			} else {
 				g.Expect(err).To(BeNil())
 				g.Expect(len(pods)).To(Equal(tt.podCount))
